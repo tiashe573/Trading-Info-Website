@@ -1,9 +1,11 @@
 import { Activity, Database, ExternalLink, Layers3, RefreshCw, Shield, Waves } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { DEEP_DIVES, type DeepDiveTab, type InsiderTrade, type TradeAction } from '../data/mockData'
+import { DEEP_DIVES, UNIVERSE, type DeepDiveTab, type InsiderTrade, type TradeAction } from '../data/mockData'
 import { useInsiderFilings } from '../hooks/useInsiderFilings'
+import { useInsiderPool } from '../hooks/useInsiderPool'
 import { formatPct, formatShares, formatUSD, signedClass } from '../lib/format'
-import type { LiveQuote } from '../lib/marketApi'
+import type { CompanyRecord, InsiderPoolRow, LiveQuote } from '../lib/marketApi'
+import { CompanySearch } from './CompanySearch'
 import { SampleBadge } from './SampleBadge'
 
 const TABS: { id: DeepDiveTab; label: string; mock?: boolean }[] = [
@@ -15,16 +17,24 @@ const TABS: { id: DeepDiveTab; label: string; mock?: boolean }[] = [
 
 type StockDeepDiveProps = {
   symbol: string
+  companyName?: string
   liveQuote?: LiveQuote
+  onSelectCompany: (company: CompanyRecord) => void
 }
 
-export function StockDeepDive({ symbol, liveQuote }: StockDeepDiveProps) {
+export function StockDeepDive({ symbol, companyName, liveQuote, onSelectCompany }: StockDeepDiveProps) {
   const [tab, setTab] = useState<DeepDiveTab>('insider')
-  const data = DEEP_DIVES[symbol] ?? DEEP_DIVES.NVDA
+  const data = DEEP_DIVES[symbol]
   const insiders = useInsiderFilings(symbol)
-  const quote = liveQuote
-    ? { ...data.quote, price: liveQuote.price, changePct: liveQuote.changePct }
-    : data.quote
+  const pool = useInsiderPool()
+  const fallbackQuote = UNIVERSE.find((row) => row.symbol === symbol)
+  const quote = {
+    symbol,
+    name: companyName || data?.quote.name || fallbackQuote?.name || symbol,
+    sector: data?.quote.sector || fallbackQuote?.sector || 'U.S. listed',
+    price: liveQuote?.price ?? data?.quote.price ?? fallbackQuote?.price ?? 0,
+    changePct: liveQuote?.changePct ?? data?.quote.changePct ?? fallbackQuote?.changePct ?? 0,
+  }
   const up = quote.changePct >= 0
 
   return (
@@ -83,18 +93,44 @@ export function StockDeepDive({ symbol, liveQuote }: StockDeepDiveProps) {
         <div className="p-3 sm:p-4">
           {tab === 'insider' && (
             <InsiderTable
+              symbol={symbol}
               rows={insiders.rows}
               loading={insiders.loading}
+              loadingMore={insiders.loadingMore}
               source={insiders.source}
               error={insiders.error}
               fmpNote={insiders.fmpNote}
+              hasMore={insiders.hasMore}
+              totalForm4={insiders.totalForm4}
+              filingsLoaded={insiders.filingsLoaded}
+              pool={pool.rows}
+              poolLoading={pool.loading}
+              poolError={pool.error}
               onReloadSec={() => void insiders.reloadSec()}
+              onLoadMore={() => void insiders.loadMore()}
+              onReloadPool={() => void pool.reload()}
               onTestFmp={() => void insiders.testFmp()}
+              onSelectCompany={onSelectCompany}
             />
           )}
-          {tab === '13f' && <Holdings13F rows={data.funds} />}
-          {tab === 'sweeps' && <OptionSweeps rows={data.sweeps} />}
-          {tab === 'darkpool' && <DarkPoolTable rows={data.darkPool} />}
+          {tab === '13f' &&
+            (data ? (
+              <Holdings13F rows={data.funds} />
+            ) : (
+              <EmptyMockTab label="13F sample is only available for the original watchlist tickers." />
+            ))}
+          {tab === 'sweeps' &&
+            (data ? (
+              <OptionSweeps rows={data.sweeps} />
+            ) : (
+              <EmptyMockTab label="Option-sweep sample is only available for the original watchlist tickers." />
+            ))}
+          {tab === 'darkpool' &&
+            (data ? (
+              <DarkPoolTable rows={data.darkPool} />
+            ) : (
+              <EmptyMockTab label="Dark-pool sample is only available for the original watchlist tickers." />
+            ))}
         </div>
       </div>
 
@@ -102,11 +138,13 @@ export function StockDeepDive({ symbol, liveQuote }: StockDeepDiveProps) {
         <div className="flex items-center justify-between">
           <div>
             <h3 className="font-display text-base font-semibold text-white">Whale alerts</h3>
-            <p className="text-[11px] text-flow-muted">Sample unusual prints · {quote.symbol}</p>
+            <p className="text-[11px] text-flow-muted">
+              {data ? `Sample unusual prints · ${quote.symbol}` : `No sample whale tape for ${quote.symbol}`}
+            </p>
           </div>
           <SampleBadge />
         </div>
-        {data.whales.map((alert) => (
+        {(data?.whales ?? []).map((alert) => (
           <article
             key={alert.id}
             className="rounded-2xl border border-flow-border bg-flow-card/70 p-3.5 transition hover:border-indigo-400/30"
@@ -138,27 +176,112 @@ export function StockDeepDive({ symbol, liveQuote }: StockDeepDiveProps) {
 }
 
 function InsiderTable({
+  symbol,
   rows,
   loading,
+  loadingMore,
   source,
   error,
   fmpNote,
+  pool,
+  poolLoading,
+  poolError,
+  hasMore,
+  totalForm4,
+  filingsLoaded,
   onReloadSec,
+  onReloadPool,
+  onLoadMore,
   onTestFmp,
+  onSelectCompany,
 }: {
+  symbol: string
   rows: InsiderTrade[]
   loading: boolean
+  loadingMore: boolean
   source: 'sec' | 'fmp' | 'mock'
   error: string | null
   fmpNote: string | null
+  pool: InsiderPoolRow[]
+  poolLoading: boolean
+  poolError: string | null
+  hasMore: boolean
+  totalForm4: number
+  filingsLoaded: number
   onReloadSec: () => void
+  onReloadPool: () => void
+  onLoadMore: () => void
   onTestFmp: () => void
+  onSelectCompany: (company: CompanyRecord) => void
 }) {
   const sourceLabel =
     source === 'sec' ? 'SEC EDGAR Form 4' : source === 'fmp' ? 'FMP insider API' : 'Sample data'
+  const topBuy = [...pool].sort((a, b) => b.buyValue - a.buyValue)[0]
+  const topSell = [...pool].sort((a, b) => b.sellValue - a.sellValue)[0]
 
   return (
     <div className="space-y-3">
+      <CompanySearch onSelect={onSelectCompany} />
+
+      <div className="rounded-xl border border-flow-border bg-[#0c1220] p-3">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-xs font-medium text-white">Recent Form 4 volume pool</p>
+            <p className="text-[11px] text-flow-muted">
+              Ranked by open-market buy + sell dollars from the latest SEC current filings
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onReloadPool}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-flow-border px-2 py-1 text-[11px] text-slate-200 hover:border-indigo-400/40"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${poolLoading ? 'animate-spin' : ''}`} />
+            Refresh pool
+          </button>
+        </div>
+        {poolError && <p className="mb-2 text-[11px] text-amber-200">{poolError}</p>}
+        {topBuy && topSell && (
+          <p className="mb-2 text-[11px] text-flow-muted">
+            Heaviest buying: <span className="font-mono text-flow-green">{topBuy.ticker}</span> · Heaviest selling:{' '}
+            <span className="font-mono text-flow-red">{topSell.ticker}</span>
+          </p>
+        )}
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {poolLoading && pool.length === 0 && (
+            <div className="px-2 py-3 text-xs text-flow-muted">Scanning latest Form 4 issuers…</div>
+          )}
+          {pool.map((row) => {
+            const active = row.ticker === symbol
+            const sellLed = row.sellValue > row.buyValue
+            return (
+              <button
+                key={row.ticker}
+                type="button"
+                onClick={() => onSelectCompany({ ticker: row.ticker, name: row.name, cik: row.cik })}
+                className={`min-w-[168px] shrink-0 rounded-xl border px-3 py-2 text-left transition ${
+                  active
+                    ? 'border-indigo-400/50 bg-indigo-500/15'
+                    : 'border-flow-border bg-flow-panel/80 hover:border-white/20'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-sm font-semibold text-white">{row.ticker}</span>
+                  <span className={`text-[10px] uppercase ${sellLed ? 'text-flow-red' : 'text-flow-green'}`}>
+                    {sellLed ? 'Sell' : 'Buy'}
+                  </span>
+                </div>
+                <div className="mt-1 truncate text-[11px] text-flow-muted">{row.name}</div>
+                <div className="mt-2 flex justify-between font-mono text-[10px]">
+                  <span className="text-flow-green">+{formatUSD(row.buyValue)}</span>
+                  <span className="text-flow-red">-{formatUSD(row.sellValue)}</span>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-[11px] text-flow-muted">
           Source:{' '}
@@ -234,7 +357,34 @@ function InsiderTable({
       {!loading && rows.length === 0 && (
         <p className="px-3 py-6 text-center text-sm text-flow-muted">No insider rows for this ticker.</p>
       )}
+      {source === 'sec' && totalForm4 > 0 && (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 px-1">
+          <p className="text-[11px] text-flow-muted">
+            Showing {rows.length} transactions from {filingsLoaded} of {totalForm4} Form 4 filings. One filing can
+            contain many lots (that is why the same director may repeat).
+          </p>
+          {hasMore && (
+            <button
+              type="button"
+              onClick={onLoadMore}
+              disabled={loadingMore}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-400/40 bg-indigo-500/10 px-3 py-1.5 text-xs text-indigo-100 hover:bg-indigo-500/20 disabled:opacity-60"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${loadingMore ? 'animate-spin' : ''}`} />
+              {loadingMore ? 'Loading…' : 'Load older Form 4s'}
+            </button>
+          )}
+        </div>
+      )}
     </div>
+    </div>
+  )
+}
+
+function EmptyMockTab({ label }: { label: string }) {
+  return (
+    <div className="rounded-xl border border-dashed border-flow-border px-4 py-8 text-center text-sm text-flow-muted">
+      {label}
     </div>
   )
 }

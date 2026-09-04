@@ -5,19 +5,18 @@ import {
   TIME_RANGES,
   TRENDING_SYMBOLS,
   UNIVERSE,
-  searchTickers,
   type TimeRange,
-  type TickerQuote,
 } from '../data/mockData'
 import { formatPct, signedClass } from '../lib/format'
 import type { LiveQuote } from '../lib/marketApi'
+import { ensureCompanyDirectory, searchCompanies } from '../lib/marketApi'
 import { SampleBadge } from './SampleBadge'
 
 type TopNavProps = {
   timeRange: TimeRange
   onTimeRangeChange: (range: TimeRange) => void
   selectedSymbol: string
-  onSelectSymbol: (symbol: string) => void
+  onSelectSymbol: (symbol: string, name?: string) => void
   quotes: Record<string, LiveQuote>
   quotesLoading: boolean
 }
@@ -33,10 +32,18 @@ export function TopNav({
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [notesOpen, setNotesOpen] = useState(false)
+  const [directoryReady, setDirectoryReady] = useState(false)
   const searchRef = useRef<HTMLDivElement>(null)
   const notesRef = useRef<HTMLDivElement>(null)
 
-  const suggestions = useMemo(() => searchTickers(query), [query])
+  useEffect(() => {
+    void ensureCompanyDirectory().then(() => setDirectoryReady(true))
+  }, [])
+
+  const suggestions = useMemo(
+    () => (directoryReady ? searchCompanies(query, 8) : []),
+    [directoryReady, query],
+  )
   const trending = TRENDING_SYMBOLS.map((symbol) => {
     const base = UNIVERSE.find((t) => t.symbol === symbol)!
     const live = quotes[symbol]
@@ -53,9 +60,9 @@ export function TopNav({
     return () => document.removeEventListener('mousedown', onDocClick)
   }, [])
 
-  function pick(ticker: TickerQuote) {
-    onSelectSymbol(ticker.symbol)
-    setQuery(ticker.symbol)
+  function pick(ticker: string, name: string) {
+    onSelectSymbol(ticker, name)
+    setQuery(ticker)
     setOpen(false)
   }
 
@@ -92,31 +99,33 @@ export function TopNav({
               setOpen(true)
             }}
             onFocus={() => setOpen(true)}
-            placeholder="Search tickers — AAPL, NVDA, TSLA, BABA…"
+            placeholder="Search company or ticker — NVIDIA, Apple, NVDA…"
             className="w-full rounded-xl border border-flow-border bg-flow-panel py-2.5 pl-10 pr-4 text-sm text-white outline-none placeholder:text-flow-muted/70 focus:border-indigo-500/60 focus:ring-2 focus:ring-indigo-500/20"
           />
           {open && (
             <div className="absolute z-50 mt-2 w-full overflow-hidden rounded-xl border border-flow-border bg-[#0c1220] shadow-2xl shadow-black/50">
               <div className="border-b border-flow-border px-3 py-2 text-[11px] uppercase tracking-wider text-flow-muted">
-                Suggested names
+                {directoryReady ? 'SEC company directory' : 'Loading company list…'}
               </div>
-              {suggestions.length === 0 ? (
-                <div className="px-3 py-4 text-sm text-flow-muted">No matching tickers.</div>
+              {directoryReady && suggestions.length === 0 ? (
+                <div className="px-3 py-4 text-sm text-flow-muted">No matching companies.</div>
               ) : (
-                suggestions.map((ticker) => (
+                suggestions.map((company) => (
                   <button
-                    key={ticker.symbol}
+                    key={`${company.cik}-${company.ticker}`}
                     type="button"
-                    onClick={() => pick(ticker)}
+                    onClick={() => pick(company.ticker, company.name)}
                     className="flex w-full items-center justify-between px-3 py-2.5 text-left hover:bg-white/5"
                   >
-                    <div>
-                      <span className="font-mono text-sm font-medium text-white">{ticker.symbol}</span>
-                      <span className="ml-2 text-sm text-flow-muted">{ticker.name}</span>
+                    <div className="min-w-0">
+                      <span className="font-mono text-sm font-medium text-white">{company.ticker}</span>
+                      <span className="ml-2 truncate text-sm text-flow-muted">{company.name}</span>
                     </div>
-                    <span className={`font-mono text-xs ${signedClass(quotes[ticker.symbol]?.changePct ?? ticker.changePct)}`}>
-                      {formatPct(quotes[ticker.symbol]?.changePct ?? ticker.changePct)}
-                    </span>
+                    {quotes[company.ticker] && (
+                      <span className={`font-mono text-xs ${signedClass(quotes[company.ticker]!.changePct)}`}>
+                        {formatPct(quotes[company.ticker]!.changePct)}
+                      </span>
+                    )}
                   </button>
                 ))
               )}

@@ -3,33 +3,56 @@ import { DEEP_DIVES } from '../data/mockData'
 import type { InsiderTrade } from '../data/mockData'
 import { fetchFmpInsiders, fetchSecInsiders, type DataSource } from '../lib/marketApi'
 
+const PAGE_SIZE = 25
+
 export function useInsiderFilings(symbol: string) {
-  const fallback = DEEP_DIVES[symbol]?.insider ?? DEEP_DIVES.NVDA.insider
+  const fallback = DEEP_DIVES[symbol]?.insider ?? []
   const [rows, setRows] = useState<InsiderTrade[]>(fallback)
   const [source, setSource] = useState<DataSource>('mock')
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [fmpNote, setFmpNote] = useState<string | null>(null)
+  const [nextOffset, setNextOffset] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
+  const [totalForm4, setTotalForm4] = useState(0)
+  const [filingsLoaded, setFilingsLoaded] = useState(0)
 
   const loadSec = useCallback(async () => {
-    const sample = DEEP_DIVES[symbol]?.insider ?? DEEP_DIVES.NVDA.insider
+    const sample = DEEP_DIVES[symbol]?.insider
     setLoading(true)
     setError(null)
     setFmpNote(null)
+    setNextOffset(0)
+    setHasMore(false)
     try {
-      const live = await fetchSecInsiders(symbol)
-      if (live.length) {
-        setRows(live)
+      const page = await fetchSecInsiders(symbol, { offset: 0, filingCount: PAGE_SIZE })
+      if (page.rows.length) {
+        setRows(page.rows)
         setSource('sec')
-      } else {
+        setNextOffset(page.nextOffset)
+        setHasMore(page.hasMore)
+        setTotalForm4(page.totalForm4)
+        setFilingsLoaded(page.fetchedFilings)
+      } else if (sample?.length) {
         setRows(sample)
         setSource('mock')
         setError('SEC returned Form 4 filings, but no transaction rows parsed. Showing sample rows.')
+      } else {
+        setRows([])
+        setSource('sec')
+        setError('No recent Form 4 transactions parsed for this issuer.')
       }
     } catch (err) {
-      setRows(sample)
-      setSource('mock')
-      setError(err instanceof Error ? err.message : 'SEC Form 4 request failed')
+      if (sample?.length) {
+        setRows(sample)
+        setSource('mock')
+        setError(err instanceof Error ? err.message : 'SEC Form 4 request failed')
+      } else {
+        setRows([])
+        setSource('sec')
+        setError(err instanceof Error ? err.message : 'SEC Form 4 request failed')
+      }
     } finally {
       setLoading(false)
     }
@@ -38,6 +61,24 @@ export function useInsiderFilings(symbol: string) {
   useEffect(() => {
     void loadSec()
   }, [loadSec])
+
+  const loadMore = useCallback(async () => {
+    if (!hasMore || loadingMore) return
+    setLoadingMore(true)
+    try {
+      const page = await fetchSecInsiders(symbol, { offset: nextOffset, filingCount: PAGE_SIZE })
+      setRows((prev) => [...prev, ...page.rows])
+      setNextOffset(page.nextOffset)
+      setHasMore(page.hasMore)
+      setTotalForm4(page.totalForm4)
+      setFilingsLoaded((prev) => prev + page.fetchedFilings)
+      setSource('sec')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load more Form 4 filings')
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [hasMore, loadingMore, nextOffset, symbol])
 
   const testFmp = useCallback(async () => {
     setLoading(true)
@@ -55,6 +96,7 @@ export function useInsiderFilings(symbol: string) {
       setRows(result.rows)
       setSource('fmp')
       setError(null)
+      setHasMore(false)
       setFmpNote(`Loaded ${result.rows.length} FMP insider rows.`)
     } catch (err) {
       setFmpNote(err instanceof Error ? err.message : 'FMP request failed')
@@ -63,5 +105,18 @@ export function useInsiderFilings(symbol: string) {
     }
   }, [symbol])
 
-  return { rows, source, loading, error, fmpNote, reloadSec: loadSec, testFmp }
+  return {
+    rows,
+    source,
+    loading,
+    loadingMore,
+    error,
+    fmpNote,
+    hasMore,
+    totalForm4,
+    filingsLoaded,
+    reloadSec: loadSec,
+    loadMore,
+    testFmp,
+  }
 }

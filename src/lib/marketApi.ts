@@ -26,6 +26,14 @@ const YAHOO_RANGE: Record<TimeRange, { range: string; interval: string }> = {
   '1Y': { range: '1y', interval: '1wk' },
 }
 
+type YahooQuoteSeries = {
+  close?: Array<number | null>
+  open?: Array<number | null>
+  high?: Array<number | null>
+  low?: Array<number | null>
+  volume?: Array<number | null>
+}
+
 type YahooChart = {
   chart?: {
     result?: Array<{
@@ -35,10 +43,17 @@ type YahooChart = {
         previousClose?: number
         chartPreviousClose?: number
       }
-      indicators?: { quote?: Array<{ close?: Array<number | null> }> }
+      indicators?: { quote?: YahooQuoteSeries[] }
     }>
     error?: { description?: string } | null
   }
+}
+
+export type SectorEtfSnapshot = {
+  symbol: string
+  changePct: number
+  price: number
+  flowProxy: number
 }
 
 type SecSubmissions = {
@@ -54,9 +69,24 @@ type SecSubmissions = {
   }
 }
 
-type CompanyTickerRow = { cik_str: number; ticker: string; title: string }
+export type CompanyRecord = {
+  ticker: string
+  name: string
+  cik: string
+}
 
-let tickerCikCache: Record<string, string> | null = null
+export type InsiderPoolRow = {
+  ticker: string
+  name: string
+  cik: string
+  buyValue: number
+  sellValue: number
+  buyShares: number
+  sellShares: number
+  filings: number
+  netValue: number
+  grossValue: number
+}
 
 export async function fetchYahooQuote(symbol: string, timeRange: TimeRange): Promise<LiveQuote> {
   const { range, interval } = YAHOO_RANGE[timeRange]
@@ -84,6 +114,55 @@ export async function fetchYahooQuote(symbol: string, timeRange: TimeRange): Pro
   }
 }
 
+export async function fetchYahooSectorSnapshot(
+  symbol: string,
+  timeRange: TimeRange,
+): Promise<SectorEtfSnapshot> {
+  const { range, interval } = YAHOO_RANGE[timeRange]
+  const url = `/api/yahoo/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}`
+  const json = (await getJson(url)) as YahooChart
+  const result = json.chart?.result?.[0]
+  const series = result?.indicators?.quote?.[0]
+  const price = result?.meta?.regularMarketPrice
+  if (!result || !series || !price) {
+    throw new Error(json.chart?.error?.description || `No Yahoo sector data for ${symbol}`)
+  }
+
+  const previousClose = result.meta?.previousClose ?? result.meta?.chartPreviousClose ?? price
+  const changePct = previousClose ? ((price - previousClose) / previousClose) * 100 : 0
+  const length = Math.max(
+    series.close?.length ?? 0,
+    series.open?.length ?? 0,
+    series.high?.length ?? 0,
+    series.low?.length ?? 0,
+    series.volume?.length ?? 0,
+  )
+
+  let flowProxy = 0
+  for (let i = 0; i < length; i++) {
+    const open = series.open?.[i]
+    const high = series.high?.[i]
+    const low = series.low?.[i]
+    const close = series.close?.[i]
+    const volume = series.volume?.[i]
+    if (
+      open == null ||
+      high == null ||
+      low == null ||
+      close == null ||
+      volume == null ||
+      !Number.isFinite(volume)
+    ) {
+      continue
+    }
+    const typicalPrice = (high + low + close) / 3
+    const direction = close > open ? 1 : close < open ? -1 : 0
+    flowProxy += typicalPrice * volume * direction
+  }
+
+  return { symbol, changePct, price, flowProxy }
+}
+
 export async function fetchFmpInsiders(symbol: string): Promise<FmpFetchResult> {
   const url = `/api/fmp/api/v4/insider-trading?symbol=${encodeURIComponent(symbol)}&page=0&apikey=${encodeURIComponent(FMP_KEY)}`
   const raw = await getJson(url)
@@ -104,20 +183,37 @@ export async function fetchFmpInsiders(symbol: string): Promise<FmpFetchResult> 
   return { raw, rows: raw.map(mapFmpRow).filter((row) => row.shares > 0 || row.value > 0) }
 }
 
-export async function fetchSecInsiders(symbol: string, limit = 8): Promise<InsiderTrade[]> {
+export type SecInsiderPage = {
+  rows: InsiderTrade[]
+  nextOffset: number
+  totalForm4: number
+  fetchedFilings: number
+  hasMore: boolean
+}
+
+const submissionsCache = new Map<string, SecSubmissions>()
+
+export async function fetchSecInsiders(
+  symbol: string,
+  options: { offset?: number; filingCount?: number } = {},
+): Promise<SecInsiderPage> {
+  const offset = options.offset ?? 0
+  const filingCount = options.filingCount ?? 25
   const cik = await resolveCik(symbol)
   if (!cik) throw new Error(`No SEC CIK mapped for ${symbol}`)
 
-  const submissions = (await getJson(
-    `/api/sec/submissions/CIK${cik}.json`,
-  )) as SecSubmissions
+  let submissions = submissionsCache.get(cik)
+  if (!submissions) {
+    submissions = (await getJson(`/api/sec/submissions/CIK${cik}.json`)) as SecSubmissions
+    submissionsCache.set(cik, submissions)
+  }
   const recent = submissions.filings?.recent
   if (!recent?.form) throw new Error('SEC submissions payload was missing filings.recent')
 
-  const form4: Array<{ accession: string; date: string; primary: string }> = []
-  for (let i = 0; i < recent.form.length && form4.length < limit; i++) {
-    if (recent.form[i] === '4') {
-      form4.push({
+  const allForm4: Array<{ accession: string; date: string; primary: string }> = []
+  for (let i = 0; i < recent.form.length; i++) {
+    if (recent.form[i] === '4' || recent.form[i] === '4/A') {
+      allForm4.push({
         accession: recent.accessionNumber?.[i] ?? '',
         date: recent.filingDate?.[i] ?? '',
         primary: recent.primaryDocument?.[i] ?? '',
@@ -125,8 +221,9 @@ export async function fetchSecInsiders(symbol: string, limit = 8): Promise<Insid
     }
   }
 
+  const batch = allForm4.slice(offset, offset + filingCount)
   const rows: InsiderTrade[] = []
-  for (const filing of form4) {
+  for (const filing of batch) {
     const xmlName = filing.primary.split('/').pop() || filing.primary
     if (!xmlName.toLowerCase().endsWith('.xml')) continue
     const accDir = filing.accession.replace(/-/g, '')
@@ -139,31 +236,178 @@ export async function fetchSecInsiders(symbol: string, limit = 8): Promise<Insid
     } catch (err) {
       console.warn('Form 4 XML fetch failed', xmlUrl, err)
     }
+    await sleep(40)
   }
 
-  return rows.slice(0, 24)
+  const nextOffset = offset + batch.length
+  return {
+    rows,
+    nextOffset,
+    totalForm4: allForm4.length,
+    fetchedFilings: batch.length,
+    hasMore: nextOffset < allForm4.length,
+  }
+}
+
+let companyDirectory: CompanyRecord[] | null = null
+const tickerCikCache: Record<string, string> = { ...CIK_BY_SYMBOL }
+const cikCompanyCache: Record<string, CompanyRecord> = {}
+
+export async function ensureCompanyDirectory(): Promise<CompanyRecord[]> {
+  if (companyDirectory) return companyDirectory
+  const payload = (await getJson('/api/edgar/files/company_tickers.json')) as Record<
+    string,
+    { cik_str: number; ticker: string; title: string }
+  >
+  companyDirectory = Object.values(payload).map((row) => {
+    const record: CompanyRecord = {
+      ticker: row.ticker.toUpperCase(),
+      name: row.title,
+      cik: String(row.cik_str).padStart(10, '0'),
+    }
+    tickerCikCache[record.ticker] = record.cik
+    cikCompanyCache[record.cik] = record
+    cikCompanyCache[String(row.cik_str)] = record
+    return record
+  })
+  return companyDirectory
+}
+
+export function searchCompanies(query: string, limit = 8): CompanyRecord[] {
+  const list = companyDirectory ?? []
+  const q = query.trim().toLowerCase()
+  if (!q) return list.slice(0, limit)
+  const starts: CompanyRecord[] = []
+  const contains: CompanyRecord[] = []
+  for (const row of list) {
+    const ticker = row.ticker.toLowerCase()
+    const name = row.name.toLowerCase()
+    if (ticker === q || ticker.startsWith(q) || name.startsWith(q)) starts.push(row)
+    else if (ticker.includes(q) || name.includes(q)) contains.push(row)
+    if (starts.length >= limit) break
+  }
+  return [...starts, ...contains].slice(0, limit)
+}
+
+export async function fetchInsiderVolumePool(limit = 24): Promise<InsiderPoolRow[]> {
+  await ensureCompanyDirectory()
+  const atom = await getText(
+    '/api/edgar/cgi-bin/browse-edgar?action=getcurrent&type=4&owner=include&count=100&output=atom',
+  )
+  const doc = new DOMParser().parseFromString(atom, 'application/xml')
+  const filings: Array<{ name: string; cik: string; indexUrl: string }> = []
+  const seen = new Set<string>()
+
+  for (const entry of Array.from(doc.getElementsByTagName('entry'))) {
+    const title = entry.getElementsByTagName('title')[0]?.textContent ?? ''
+    const match = title.match(/^4(?:\/A)?\s*-\s*(.+?)\s*\((\d+)\)\s*\(Issuer\)\s*$/)
+    if (!match) continue
+    const summary = entry.getElementsByTagName('summary')[0]?.textContent ?? ''
+    const accession = summary.match(/AccNo:\s*([0-9-]+)/i)?.[1]
+    const href = entry.getElementsByTagName('link')[0]?.getAttribute('href') ?? ''
+    if (!accession || !href || seen.has(accession)) continue
+    seen.add(accession)
+    filings.push({
+      name: match[1].trim(),
+      cik: match[2].padStart(10, '0'),
+      indexUrl: toEdgarProxy(href),
+    })
+    if (filings.length >= limit) break
+  }
+
+  const totals = new Map<string, InsiderPoolRow>()
+
+  for (const filing of filings) {
+    try {
+      const indexHtml = await getText(filing.indexUrl)
+      const xmlHref = findForm4XmlHref(indexHtml)
+      if (!xmlHref) continue
+      const xml = await getText(toEdgarProxy(xmlHref))
+      const parsed = parseForm4Document(xml, xmlHref.startsWith('http') ? xmlHref : `https://www.sec.gov${xmlHref}`)
+      const ticker =
+        parsed.issuerSymbol ||
+        cikCompanyCache[parsed.issuerCik]?.ticker ||
+        cikCompanyCache[filing.cik]?.ticker ||
+        ''
+      if (!ticker) continue
+      const key = ticker.toUpperCase()
+      const current = totals.get(key) ?? {
+        ticker: key,
+        name: parsed.issuerName || filing.name || cikCompanyCache[filing.cik]?.name || key,
+        cik: parsed.issuerCik || filing.cik,
+        buyValue: 0,
+        sellValue: 0,
+        buyShares: 0,
+        sellShares: 0,
+        filings: 0,
+        netValue: 0,
+        grossValue: 0,
+      }
+      current.filings += 1
+      for (const row of parsed.rows) {
+        if (row.action === 'Buy') {
+          current.buyValue += row.value
+          current.buyShares += row.shares
+        }
+        if (row.action === 'Sell') {
+          current.sellValue += row.value
+          current.sellShares += row.shares
+        }
+      }
+      current.netValue = current.buyValue - current.sellValue
+      current.grossValue = current.buyValue + current.sellValue
+      totals.set(key, current)
+    } catch (err) {
+      console.warn('Insider pool filing failed', filing.indexUrl, err)
+    }
+    await sleep(60)
+  }
+
+  return [...totals.values()].sort((a, b) => b.grossValue - a.grossValue || b.filings - a.filings)
+}
+
+function findForm4XmlHref(indexHtml: string): string | null {
+  const hrefs = [...indexHtml.matchAll(/href="([^"]+\.xml)"/gi)].map((match) => match[1] ?? '')
+  return hrefs.find((href) => href && !href.toLowerCase().includes('xsl')) ?? hrefs[0] ?? null
+}
+
+function toEdgarProxy(url: string): string {
+  if (url.startsWith('/api/edgar')) return url
+  if (url.startsWith('https://www.sec.gov')) return `/api/edgar${url.slice('https://www.sec.gov'.length)}`
+  if (url.startsWith('http://www.sec.gov')) return `/api/edgar${url.slice('http://www.sec.gov'.length)}`
+  if (url.startsWith('/')) return `/api/edgar${url}`
+  return url
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
 
 async function resolveCik(symbol: string): Promise<string | null> {
-  const known = CIK_BY_SYMBOL[symbol.toUpperCase()]
+  const known = tickerCikCache[symbol.toUpperCase()] ?? CIK_BY_SYMBOL[symbol.toUpperCase()]
   if (known) return known
-  if (!tickerCikCache) {
-    const payload = (await getJson('/api/edgar/files/company_tickers.json')) as Record<
-      string,
-      CompanyTickerRow
-    >
-    tickerCikCache = {}
-    for (const row of Object.values(payload)) {
-      tickerCikCache[row.ticker.toUpperCase()] = String(row.cik_str).padStart(10, '0')
-    }
-  }
+  await ensureCompanyDirectory()
   return tickerCikCache[symbol.toUpperCase()] ?? null
 }
 
 function parseForm4Xml(xml: string, filingUrl: string): InsiderTrade[] {
-  const doc = new DOMParser().parseFromString(xml, 'application/xml')
-  if (doc.querySelector('parsererror')) return []
+  return parseForm4Document(xml, filingUrl).rows
+}
 
+function parseForm4Document(xml: string, filingUrl: string): {
+  issuerSymbol: string
+  issuerName: string
+  issuerCik: string
+  rows: InsiderTrade[]
+} {
+  const doc = new DOMParser().parseFromString(xml, 'application/xml')
+  if (doc.querySelector('parsererror')) {
+    return { issuerSymbol: '', issuerName: '', issuerCik: '', rows: [] }
+  }
+
+  const issuerSymbol = text(doc, 'issuerTradingSymbol').toUpperCase()
+  const issuerName = text(doc, 'issuerName')
+  const issuerCik = text(doc, 'issuerCik').padStart(10, '0')
   const name = formatInsiderName(text(doc, 'rptOwnerName') || 'Unknown insider')
   const title = ownerTitle(doc)
   const rows: InsiderTrade[] = []
@@ -195,7 +439,7 @@ function parseForm4Xml(xml: string, filingUrl: string): InsiderTrade[] {
     })
   })
 
-  return rows
+  return { issuerSymbol, issuerName, issuerCik, rows }
 }
 
 function mapTxnCode(code: string, acquiredDisposed: string): TradeAction {

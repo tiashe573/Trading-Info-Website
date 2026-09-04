@@ -30,6 +30,7 @@ export default defineConfig({
       '/api/edgar': withHeaders('https://www.sec.gov', '/api/edgar', SEC_UA),
       '/api/yahoo': withHeaders('https://query1.finance.yahoo.com', '/api/yahoo', BROWSER_UA),
       '/api/fmp': withHeaders('https://financialmodelingprep.com', '/api/fmp', BROWSER_UA),
+      '/api/clerk': withHeaders('https://disclosures-clerk.house.gov', '/api/clerk', BROWSER_UA),
     },
   },
 })
