@@ -11,6 +11,7 @@ import {
 } from '../data/mockData'
 import { formatPct, signedClass } from '../lib/format'
 import type { LiveQuote } from '../lib/marketApi'
+import { SampleBadge } from './SampleBadge'
 
 type TopNavProps = {
   timeRange: TimeRange
@@ -173,8 +174,9 @@ export function TopNav({
             </button>
             {notesOpen && (
               <div className="absolute right-0 z-50 mt-2 w-80 overflow-hidden rounded-xl border border-flow-border bg-[#0c1220] shadow-2xl">
-                <div className="border-b border-flow-border px-3 py-2 text-[11px] uppercase tracking-wider text-flow-muted">
-                  Alerts
+                <div className="flex items-center justify-between border-b border-flow-border px-3 py-2">
+                  <span className="text-[11px] uppercase tracking-wider text-flow-muted">Alerts</span>
+                  <SampleBadge />
                 </div>
                 {NOTIFICATIONS.map((note) => (
                   <div key={note.id} className="border-b border-flow-border/70 px-3 py-2.5 last:border-0">

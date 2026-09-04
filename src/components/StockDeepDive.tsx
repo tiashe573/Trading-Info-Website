@@ -1,23 +1,30 @@
-import { Activity, ExternalLink, Layers3, Shield, Waves } from 'lucide-react'
+import { Activity, Database, ExternalLink, Layers3, RefreshCw, Shield, Waves } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { DEEP_DIVES, type DeepDiveTab, type TradeAction } from '../data/mockData'
+import { DEEP_DIVES, type DeepDiveTab, type InsiderTrade, type TradeAction } from '../data/mockData'
+import { useInsiderFilings } from '../hooks/useInsiderFilings'
 import { formatPct, formatShares, formatUSD, signedClass } from '../lib/format'
+import type { LiveQuote } from '../lib/marketApi'
+import { SampleBadge } from './SampleBadge'
 
-const TABS: { id: DeepDiveTab; label: string }[] = [
+const TABS: { id: DeepDiveTab; label: string; mock?: boolean }[] = [
   { id: 'insider', label: 'Insider Activity' },
-  { id: '13f', label: '13F Holdings' },
-  { id: 'sweeps', label: 'Option Sweeps' },
-  { id: 'darkpool', label: 'Dark Pool Flows' },
+  { id: '13f', label: '13F Holdings', mock: true },
+  { id: 'sweeps', label: 'Option Sweeps', mock: true },
+  { id: 'darkpool', label: 'Dark Pool Flows', mock: true },
 ]
 
 type StockDeepDiveProps = {
   symbol: string
+  liveQuote?: LiveQuote
 }
 
-export function StockDeepDive({ symbol }: StockDeepDiveProps) {
+export function StockDeepDive({ symbol, liveQuote }: StockDeepDiveProps) {
   const [tab, setTab] = useState<DeepDiveTab>('insider')
   const data = DEEP_DIVES[symbol] ?? DEEP_DIVES.NVDA
-  const quote = data.quote
+  const insiders = useInsiderFilings(symbol)
+  const quote = liveQuote
+    ? { ...data.quote, price: liveQuote.price, changePct: liveQuote.changePct }
+    : data.quote
   const up = quote.changePct >= 0
 
   return (
@@ -30,6 +37,13 @@ export function StockDeepDive({ symbol }: StockDeepDiveProps) {
               <span className="rounded-md border border-indigo-400/30 bg-indigo-500/10 px-2 py-0.5 font-mono text-xs text-indigo-200">
                 Featured
               </span>
+              {liveQuote ? (
+                <span className="rounded-md border border-flow-green/30 bg-flow-green/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-flow-green">
+                  Yahoo live
+                </span>
+              ) : (
+                <SampleBadge />
+              )}
             </div>
             <div className="mt-2 flex flex-wrap items-end gap-3">
               <span className="font-mono text-2xl font-semibold text-white">{quote.symbol}</span>
@@ -44,7 +58,7 @@ export function StockDeepDive({ symbol }: StockDeepDiveProps) {
             </div>
           </div>
           <div className={`hidden h-10 items-end gap-0.5 sm:flex ${up ? 'text-flow-green' : 'text-flow-red'}`}>
-            <Sparkline up={up} />
+            <Sparkline values={liveQuote?.sparkline} up={up} />
           </div>
         </div>
 
@@ -54,19 +68,30 @@ export function StockDeepDive({ symbol }: StockDeepDiveProps) {
               key={item.id}
               type="button"
               onClick={() => setTab(item.id)}
-              className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+              className={`inline-flex items-center whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-medium transition ${
                 tab === item.id
                   ? 'bg-white/10 text-white shadow-[inset_0_0_0_1px_rgba(129,140,248,0.35)]'
                   : 'text-flow-muted hover:bg-white/5 hover:text-white'
               }`}
             >
               {item.label}
+              {item.mock && <SampleBadge className="ml-1.5" />}
             </button>
           ))}
         </div>
 
         <div className="p-3 sm:p-4">
-          {tab === 'insider' && <InsiderTable rows={data.insider} />}
+          {tab === 'insider' && (
+            <InsiderTable
+              rows={insiders.rows}
+              loading={insiders.loading}
+              source={insiders.source}
+              error={insiders.error}
+              fmpNote={insiders.fmpNote}
+              onReloadSec={() => void insiders.reloadSec()}
+              onTestFmp={() => void insiders.testFmp()}
+            />
+          )}
           {tab === '13f' && <Holdings13F rows={data.funds} />}
           {tab === 'sweeps' && <OptionSweeps rows={data.sweeps} />}
           {tab === 'darkpool' && <DarkPoolTable rows={data.darkPool} />}
@@ -77,12 +102,9 @@ export function StockDeepDive({ symbol }: StockDeepDiveProps) {
         <div className="flex items-center justify-between">
           <div>
             <h3 className="font-display text-base font-semibold text-white">Whale alerts</h3>
-            <p className="text-[11px] text-flow-muted">Live unusual prints · {quote.symbol}</p>
+            <p className="text-[11px] text-flow-muted">Sample unusual prints · {quote.symbol}</p>
           </div>
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-flow-green/30 bg-flow-green/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-flow-green">
-            <span className="h-1.5 w-1.5 rounded-full bg-flow-green live-dot" />
-            Live
-          </span>
+          <SampleBadge />
         </div>
         {data.whales.map((alert) => (
           <article
@@ -115,8 +137,58 @@ export function StockDeepDive({ symbol }: StockDeepDiveProps) {
   )
 }
 
-function InsiderTable({ rows }: { rows: (typeof DEEP_DIVES)['NVDA']['insider'] }) {
+function InsiderTable({
+  rows,
+  loading,
+  source,
+  error,
+  fmpNote,
+  onReloadSec,
+  onTestFmp,
+}: {
+  rows: InsiderTrade[]
+  loading: boolean
+  source: 'sec' | 'fmp' | 'mock'
+  error: string | null
+  fmpNote: string | null
+  onReloadSec: () => void
+  onTestFmp: () => void
+}) {
+  const sourceLabel =
+    source === 'sec' ? 'SEC EDGAR Form 4' : source === 'fmp' ? 'FMP insider API' : 'Sample data'
+
   return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-[11px] text-flow-muted">
+          Source:{' '}
+          <span className={source === 'mock' ? 'text-amber-200' : 'text-flow-green'}>{sourceLabel}</span>
+          {source === 'mock' && <SampleBadge className="ml-2" />}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={onReloadSec}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-flow-border bg-white/5 px-2.5 py-1 text-[11px] text-slate-200 hover:border-indigo-400/40"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            Reload SEC
+          </button>
+          <button
+            type="button"
+            onClick={onTestFmp}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-flow-border bg-white/5 px-2.5 py-1 text-[11px] text-slate-200 hover:border-indigo-400/40"
+          >
+            <Database className="h-3.5 w-3.5" />
+            Test FMP API
+          </button>
+        </div>
+      </div>
+      {(error || fmpNote) && (
+        <p className="rounded-lg border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          {fmpNote ?? error}
+        </p>
+      )}
     <div className="overflow-x-auto">
       <table className="w-full min-w-[720px] text-left text-sm">
         <thead>
@@ -159,6 +231,10 @@ function InsiderTable({ rows }: { rows: (typeof DEEP_DIVES)['NVDA']['insider'] }
           ))}
         </tbody>
       </table>
+      {!loading && rows.length === 0 && (
+        <p className="px-3 py-6 text-center text-sm text-flow-muted">No insider rows for this ticker.</p>
+      )}
+    </div>
     </div>
   )
 }
@@ -167,6 +243,10 @@ function Holdings13F({ rows }: { rows: (typeof DEEP_DIVES)['NVDA']['funds'] }) {
   const maxAbs = Math.max(...rows.map((r) => Math.abs(r.changeShares)))
   return (
     <div className="space-y-2">
+      <div className="mb-1 flex items-center gap-2">
+        <SampleBadge />
+        <span className="text-[11px] text-flow-muted">Illustrative 13F adds/trims — not live filings</span>
+      </div>
       {rows.map((row) => {
         const width = `${Math.max(8, (Math.abs(row.changeShares) / maxAbs) * 100)}%`
         const add = row.changeShares >= 0
@@ -217,6 +297,11 @@ function Holdings13F({ rows }: { rows: (typeof DEEP_DIVES)['NVDA']['funds'] }) {
 
 function OptionSweeps({ rows }: { rows: (typeof DEEP_DIVES)['NVDA']['sweeps'] }) {
   return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <SampleBadge />
+        <span className="text-[11px] text-flow-muted">Illustrative option sweeps — not live options flow</span>
+      </div>
     <div className="overflow-x-auto">
       <table className="w-full min-w-[680px] text-left text-sm">
         <thead>
@@ -251,11 +336,17 @@ function OptionSweeps({ rows }: { rows: (typeof DEEP_DIVES)['NVDA']['sweeps'] })
         </tbody>
       </table>
     </div>
+    </div>
   )
 }
 
 function DarkPoolTable({ rows }: { rows: (typeof DEEP_DIVES)['NVDA']['darkPool'] }) {
   return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <SampleBadge />
+        <span className="text-[11px] text-flow-muted">Illustrative dark-pool prints — not live ATS data</span>
+      </div>
     <div className="overflow-x-auto">
       <table className="w-full min-w-[680px] text-left text-sm">
         <thead>
@@ -289,6 +380,7 @@ function DarkPoolTable({ rows }: { rows: (typeof DEEP_DIVES)['NVDA']['darkPool']
         </tbody>
       </table>
     </div>
+    </div>
   )
 }
 
@@ -297,6 +389,10 @@ function ActionBadge({ action }: { action: TradeAction }) {
     Buy: 'border-flow-green/30 bg-flow-green/10 text-flow-green',
     Sell: 'border-flow-red/30 bg-flow-red/10 text-flow-red',
     'Option Exercise': 'border-violet-400/30 bg-violet-500/10 text-violet-200',
+    Gift: 'border-indigo-400/30 bg-indigo-500/10 text-indigo-200',
+    Award: 'border-sky-400/30 bg-sky-500/10 text-sky-200',
+    Tax: 'border-amber-400/30 bg-amber-500/10 text-amber-200',
+    Other: 'border-slate-500/30 bg-slate-500/10 text-slate-300',
   }
   return (
     <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${styles[action]}`}>
@@ -331,15 +427,25 @@ function SideBadge({ side }: { side: 'Buy' | 'Sell' | 'Mixed' }) {
   )
 }
 
-function Sparkline({ up }: { up: boolean }) {
+function Sparkline({ values, up }: { values?: number[]; up: boolean }) {
   const points = useMemo(() => {
-    const values = up
-      ? [18, 22, 19, 28, 24, 32, 30, 38, 34, 44]
-      : [44, 40, 42, 35, 36, 28, 30, 22, 24, 18]
-    return values
-      .map((y, i) => `${i * 12},${48 - y}`)
+    const series =
+      values && values.length > 1
+        ? values
+        : up
+          ? [18, 22, 19, 28, 24, 32, 30, 38, 34, 44]
+          : [44, 40, 42, 35, 36, 28, 30, 22, 24, 18]
+    const min = Math.min(...series)
+    const max = Math.max(...series)
+    const span = max - min || 1
+    return series
+      .map((value, i) => {
+        const x = series.length === 1 ? 0 : (i / (series.length - 1)) * 108
+        const y = 44 - ((value - min) / span) * 36
+        return `${x},${y}`
+      })
       .join(' ')
-  }, [up])
+  }, [up, values])
 
   return (
     <svg width="120" height="40" viewBox="0 0 108 48" className="overflow-visible">

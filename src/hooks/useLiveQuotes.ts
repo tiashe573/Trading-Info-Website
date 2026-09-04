@@ -2,19 +2,22 @@ import { useEffect, useState } from 'react'
 import { fetchYahooQuote, type LiveQuote } from '../lib/marketApi'
 import type { TimeRange } from '../data/mockData'
 
+const REFRESH_MS = 20_000
+
 export function useLiveQuotes(symbols: string[], timeRange: TimeRange) {
   const [quotes, setQuotes] = useState<Record<string, LiveQuote>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const key = [...new Set(symbols)].join(',')
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setError(null)
 
-    async function load() {
+    async function load(isRefresh = false) {
+      if (!isRefresh) setLoading(true)
+      setError(null)
       try {
-        const unique = [...new Set(symbols)]
+        const unique = key ? key.split(',') : []
         const results = await Promise.allSettled(
           unique.map((symbol) => fetchYahooQuote(symbol, timeRange)),
         )
@@ -37,11 +40,13 @@ export function useLiveQuotes(symbols: string[], timeRange: TimeRange) {
       }
     }
 
-    void load()
+    void load(false)
+    const timer = window.setInterval(() => void load(true), REFRESH_MS)
     return () => {
       cancelled = true
+      window.clearInterval(timer)
     }
-  }, [symbols.join(','), timeRange])
+  }, [key, timeRange])
 
   return { quotes, loading, error }
 }

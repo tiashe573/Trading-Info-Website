@@ -4,7 +4,7 @@ import type { InsiderTrade } from '../data/mockData'
 import { fetchFmpInsiders, fetchSecInsiders, type DataSource } from '../lib/marketApi'
 
 export function useInsiderFilings(symbol: string) {
-  const fallback = (DEEP_DIVES[symbol] ?? DEEP_DIVES.NVDA).insider
+  const fallback = DEEP_DIVES[symbol]?.insider ?? DEEP_DIVES.NVDA.insider
   const [rows, setRows] = useState<InsiderTrade[]>(fallback)
   const [source, setSource] = useState<DataSource>('mock')
   const [loading, setLoading] = useState(true)
@@ -12,6 +12,7 @@ export function useInsiderFilings(symbol: string) {
   const [fmpNote, setFmpNote] = useState<string | null>(null)
 
   const loadSec = useCallback(async () => {
+    const sample = DEEP_DIVES[symbol]?.insider ?? DEEP_DIVES.NVDA.insider
     setLoading(true)
     setError(null)
     setFmpNote(null)
@@ -21,18 +22,18 @@ export function useInsiderFilings(symbol: string) {
         setRows(live)
         setSource('sec')
       } else {
-        setRows(fallback)
+        setRows(sample)
         setSource('mock')
         setError('SEC returned Form 4 filings, but no transaction rows parsed. Showing sample rows.')
       }
     } catch (err) {
-      setRows(fallback)
+      setRows(sample)
       setSource('mock')
       setError(err instanceof Error ? err.message : 'SEC Form 4 request failed')
     } finally {
       setLoading(false)
     }
-  }, [fallback, symbol])
+  }, [symbol])
 
   useEffect(() => {
     void loadSec()

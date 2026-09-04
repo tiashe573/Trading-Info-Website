@@ -2,6 +2,7 @@ import { ArrowDownRight, ArrowUpRight, Building2, Cpu, Landmark } from 'lucide-r
 import type { ReactNode } from 'react'
 import { MACRO_BY_RANGE, SECTOR_HEATMAP, type TimeRange } from '../data/mockData'
 import { formatPct, formatUSD, signedClass } from '../lib/format'
+import { SampleBadge } from './SampleBadge'
 
 type MacroOverviewProps = {
   timeRange: TimeRange
@@ -16,7 +17,10 @@ export function MacroOverview({ timeRange }: MacroOverviewProps) {
     <section className="space-y-3">
       <div className="flex items-end justify-between gap-3">
         <div>
-          <h2 className="font-display text-lg font-semibold text-white">Market-wide flow</h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="font-display text-lg font-semibold text-white">Market-wide flow</h2>
+            <SampleBadge />
+          </div>
           <p className="text-xs text-flow-muted">
             Macro view · U.S. equities · {timeRange} net institutional & insider activity
           </p>
@@ -49,9 +53,12 @@ export function MacroOverview({ timeRange }: MacroOverviewProps) {
       </div>
 
       <div className="rounded-2xl border border-flow-border bg-flow-panel/80 p-4">
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <h3 className="text-sm font-medium text-white">Sector flow heatmap</h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-sm font-medium text-white">Sector flow heatmap</h3>
+              <SampleBadge />
+            </div>
             <p className="text-[11px] text-flow-muted">Net buying (green) vs. net selling (red)</p>
           </div>
           <div className="flex items-center gap-2 font-mono text-[10px] text-flow-muted">
