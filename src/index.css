@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --font-display: "Outfit", "IBM Plex Sans", sans-serif;
+  --color-flow-bg: #090d16;
+  --color-flow-panel: #0d1320;
+  --color-flow-card: #111827;
+  --color-flow-border: #1e293b;
+  --color-flow-muted: #8b95a8;
+  --color-flow-green: #22d3a6;
+  --color-flow-red: #f43f5e;
+  --color-flow-violet: #8b5cf6;
+  --color-flow-indigo: #6366f1;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+  background: #090d16;
+  color: #e8edf7;
+  font-family: var(--font-sans);
+}
+
+body {
+  background-image:
+    radial-gradient(ellipse 80% 50% at 10% -10%, rgba(99, 102, 241, 0.16), transparent 50%),
+    radial-gradient(ellipse 60% 40% at 90% 0%, rgba(139, 92, 246, 0.1), transparent 45%);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a3548 transparent;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2a3548;
+  border-radius: 999px;
+}
+
+::selection {
+  background: rgba(99, 102, 241, 0.35);
+}
+
+@keyframes pulse-live {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(34, 211, 166, 0.55);
+  }
+  50% {
+    opacity: 0.7;
+    box-shadow: 0 0 0 6px rgba(34, 211, 166, 0);
+  }
+}
+
+.live-dot {
+  animation: pulse-live 1.8s ease-out infinite;
+}
